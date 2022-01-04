@@ -696,14 +696,15 @@ const HUFTable = struct {
 // For more description of FSE see
 // https://github.com/Cyan4973/FiniteStateEntropy/
 
-/// FSE table decoding uses exponential memory, so limit the maximum accuracy
-const FSE_MAX_ACCURACY_LOG = 15;
-/// Limit the maximum number of symbols so they can be stored in a single byte
-const FSE_MAX_SYMBS = 256;
 
 /// The tables needed to decode FSE encoded streams
 const FSETable = struct {
     const Self = @This();
+
+    /// FSE table decoding uses exponential memory, so limit the maximum accuracy
+    const FSE_MAX_ACCURACY_LOG = 15;
+    /// Limit the maximum number of symbols so they can be stored in a single byte
+    const FSE_MAX_SYMBS = 256;
 
     symbols: ?[]u8 = null,
     num_bits: ?[]u8 = null,
@@ -751,9 +752,7 @@ const FSETable = struct {
 
     /// Decodes a single FSE symbol and updates the offset
     /// Combine peek and update: decode a symbol and update the state
-    fn decode_symbol(s: *Self,
-                     state: *u16, src: []const u8,
-                     offset: *i64) !u8 {
+    inline fn decode_symbol(s: *Self, state: *u16, src: []const u8, offset: *i64) !u8 {
         const symb = s.*.peek_symbol(state.*);
         try s.*.update_state(state, src, offset);
         return symb;
@@ -854,11 +853,11 @@ fn FSE_init_dtable(dtable: *FSETable,
                    norm_freqs: []const i16, num_symbs: usize,
                    accuracy_log: u8,
                    allocator: *Allocator) !void {
-    if (accuracy_log > FSE_MAX_ACCURACY_LOG) {
+    if (accuracy_log > FSETable.FSE_MAX_ACCURACY_LOG) {
         // ERROR("FSE accuracy too large");
         return error.FSEAccuracyTooLarge;
     }
-    if (num_symbs > FSE_MAX_SYMBS) {
+    if (num_symbs > FSETable.FSE_MAX_SYMBS) {
         // ERROR("Too many symbols for FSE");
         return error.TooManySymbols;
     }
@@ -891,7 +890,7 @@ fn FSE_init_dtable(dtable: *FSETable,
     // and where the destination range should start
     // Needs to be u16 because max value is 2 * max number of symbols,
     // which can be larger than a byte can store
-    var state_desc: [FSE_MAX_SYMBS]u16 = [_]u16{0} ** FSE_MAX_SYMBS;
+    var state_desc: [FSETable.FSE_MAX_SYMBS]u16 = [_]u16{0} ** FSETable.FSE_MAX_SYMBS;
 
     // "Symbols are scanned in their natural order for "less than 1"
     // probabilities. Symbols with this probability are being attributed a
@@ -980,9 +979,9 @@ fn FSE_decode_header(dtable: *FSETable, in: *ZStdIStream,
     // It's a bitstream which is read forward, in little-endian fashion. It's
     // not necessary to know its exact size, since it will be discovered and
     // reported by the decoding process.
-    if (max_accuracy_log > FSE_MAX_ACCURACY_LOG) {
+    if (max_accuracy_log > FSETable.FSE_MAX_ACCURACY_LOG) {
         print(@src().fn_name ++ ": max_accuracy_log={}, FSE_MAX_ACCURACY_LOG={}\n",
-              .{ max_accuracy_log, FSE_MAX_ACCURACY_LOG, });
+              .{ max_accuracy_log, FSETable.FSE_MAX_ACCURACY_LOG, });
         return error.FSEAccuracyTooLarge;
     }
 
@@ -1011,10 +1010,10 @@ fn FSE_decode_header(dtable: *FSETable, in: *ZStdIStream,
     // 0 to 98) use only 7 bits, values from 99 to 156 use 8 bits. "
 
     var remaining: i32 = @bitCast(i32, @as(u32, 1) << @truncate(u5, accuracy_log));
-    var frequencies: [FSE_MAX_SYMBS]i16 = [_]i16{-1} ** FSE_MAX_SYMBS;
+    var frequencies: [FSETable.FSE_MAX_SYMBS]i16 = [_]i16{-1} ** FSETable.FSE_MAX_SYMBS;
 
     var symb: usize = 0;
-    while ((remaining > 0) and (symb < FSE_MAX_SYMBS)) {
+    while ((remaining > 0) and (symb < FSETable.FSE_MAX_SYMBS)) {
         // Log of the number of possible values we could read
         const lremaining = @bitCast(u32, remaining);
         var bits = highest_set_bit(lremaining + 1) + 1;
@@ -1060,7 +1059,7 @@ fn FSE_decode_header(dtable: *FSETable, in: *ZStdIStream,
 
             while (true) {
                 var i: u64 = 0;
-                while ((i < repeat) and (symb < FSE_MAX_SYMBS)) : (i += 1) {
+                while ((i < repeat) and (symb < FSETable.FSE_MAX_SYMBS)) : (i += 1) {
                     frequencies[symb] = 0;
                     symb += 1;
                 }
@@ -1083,7 +1082,7 @@ fn FSE_decode_header(dtable: *FSETable, in: *ZStdIStream,
     // "When last symbol reaches cumulated total of 1 << Accuracy_Log, decoding
     // is complete. If the last symbol makes cumulated total go above 1 <<
     // Accuracy_Log, distribution is considered corrupted."
-    if ((remaining != 0) or (symb >= FSE_MAX_SYMBS)) {
+    if ((remaining != 0) or (symb >= FSETable.FSE_MAX_SYMBS)) {
         // CORRUPTION();
         print(@src().fn_name ++ ": remaining={}, symb={}\n",
               .{remaining, symb});
