@@ -387,15 +387,15 @@ fn STREAM_read_bits(src: []const u8,
 //*** END IO STREAM OPERATIONS
 
 // HUFFMAN PRIMITIVES
-/// Table decode method uses exponential memory, so we need to limit depth
-const HUF_MAX_BITS = 16;
-
-/// Limit the maximum number of symbols to 256 so we can store a symbol in a byte
-const HUF_MAX_SYMBS = 256;
 
 /// Structure containing all tables necessary for efficient Huffman decoding
 const HUFTable = struct {
     const Self = @This();
+
+    /// Table decode method uses exponential memory, so we need to limit depth
+    const HUF_MAX_BITS = 16;
+    /// Limit the maximum number of symbols to 256 so we can store a symbol in a byte
+    const HUF_MAX_SYMBS = 256;
 
     symbols: ?[]u8 = null,
     num_bits: ?[]u8 = null,
@@ -712,13 +712,9 @@ const FSETable = struct {
     accuracy_log: u8 = 0,
 
     /// Read bits from the stream to initialize the state and shift offset back
-    // static inline void FSE_init_state(const FSETable *const dtable,
-    //                                   u16 *const state, const u8 *const src,
-    //                                   i64 *const offset);
-    inline fn init_state(s: *Self, state: *u16, src: []const u8, offset: *i64) !void {
+    inline fn init_state(s: *Self, src: []const u8, offset: *i64) !u16 {
         // Read in a full `accuracy_log` bits to initialize the state
-        const bits: u8 = s.*.accuracy_log;
-        state.* = @truncate(u16, try STREAM_read_bits(src, bits, offset));
+        return @truncate(u16, try STREAM_read_bits(src, s.*.accuracy_log, offset));
     }
 
     fn free_dtable(s: *Self, allocator: *Allocator) void {
@@ -803,14 +799,12 @@ fn FSE_decompress_interleaved2(dtable: *FSETable,
     // The offset starts at the end because FSE streams are read backwards
     var offset = @bitCast(i64, (len * 8) - upadding);
 
-    var state1: u16 = 0;
-    var state2: u16 = 0;
     // "The first state (State1) encodes the even indexed symbols, and the
     // second (State2) encodes the odd indexes. State1 is initialized first, and
     // then State2, and they take turns decoding a single symbol and updating
     // their state."
-    try dtable.init_state(&state1, src, &offset);
-    try dtable.init_state(&state2, src, &offset);
+    var state1: u16 = try dtable.init_state(src, &offset);
+    var state2: u16 = try dtable.init_state(src, &offset);
 
     // Decode until we overflow the stream
     // Since we decode in reverse order, overflowing the stream is offset going
@@ -1838,6 +1832,9 @@ pub fn ZSTD_decompress_with_dict(dst: []u8, src: []const u8, parsed_dict: *ZStdD
     return zdctx.out.pos;
 }
 
+fn ARRAY(comptime T: type, comptime v: T, comptime N: usize) [N]T {
+    return [_]T{v} ** N;
+}
 
 /// Decode the Huffman table description
 fn decode_huf_table(allocator: *Allocator, dtable: *HUFTable, in: *ZStdIStream) !void {
@@ -1847,9 +1844,10 @@ fn decode_huf_table(allocator: *Allocator, dtable: *HUFTable, in: *ZStdIStream) 
     // "This is a single byte value (0-255), which describes how to decode the list of weights."
     const header = @truncate(u8, try in.read_bits(8));
 
-    print("=> decode_huf_table: header={}\n", .{ header });
-    var weights: [HUF_MAX_SYMBS]u8 = [_]u8{0} ** HUF_MAX_SYMBS;
-
+    print(@src().fn_name ++ ": >> header={}\n", .{ header });
+    //var weights: [HUFTable.HUF_MAX_SYMBS]u8 = [_]u8{0} ** HUFTable.HUF_MAX_SYMBS;
+    var weights = ARRAY(u8, 0, HUFTable.HUF_MAX_SYMBS);
+ 
     var num_symbs: i64 = 0;
 
     if (header >= 128) {
@@ -1885,7 +1883,7 @@ fn decode_huf_table(allocator: *Allocator, dtable: *HUFTable, in: *ZStdIStream) 
     try dtable.init_usingweights(weights[0..], num_symbs, allocator);
 }
 
-fn fse_decode_hufweights(allocator: *Allocator, weights: *ZStdOStream, in: *ZStdIStream,
+inline fn fse_decode_hufweights(allocator: *Allocator, weights: *ZStdOStream, in: *ZStdIStream,
                          num_symbs: *i64) !void {
     const MAX_ACCURACY_LOG = 7;
 
@@ -2034,9 +2032,6 @@ fn decode_sequences(fctx: *ZStdFrameContext, in: *ZStdIStream) !?[]ZStdSequenceC
     }
     print("num_sequences={}\n", .{ num_sequences });
     var sequences = try fctx.*.allocator.alloc(ZStdSequenceCommand, num_sequences);
-    //     if (!*sequences) {
-    //         BAD_ALLOC();
-    //     }
 
     try decompress_sequences(fctx, in, sequences[0..]);
     return sequences;
@@ -2117,20 +2112,20 @@ fn decompress_sequences(fctx: *ZStdFrameContext, in: *ZStdIStream, sequences: []
     // It starts by Literals_Length_State, followed by Offset_State, and finally
     // Match_Length_State."
     var bo = @bitCast(i64, bit_offset);
-    print("decompress_sequences: bit_offset={}\n", .{ bo });
-    try states.ll_table.init_state(&states.ll_state, src, &bo);
-    print("decompress_sequences: bit_offset={}\n", .{ bo });
-    try states.of_table.init_state(&states.of_state, src, &bo);
-    print("decompress_sequences: bit_offset={}\n", .{ bo });
-    try states.ml_table.init_state(&states.ml_state, src, &bo);
-    print("decompress_sequences: bit_offset={}\n", .{ bo });
+    print(@src().fn_name ++ ": bit_offset={}\n", .{ bo });
+    states.ll_state = try states.ll_table.init_state(src, &bo);
+    print(@src().fn_name ++ ": bit_offset={}\n", .{ bo });
+    states.of_state = try states.of_table.init_state(src, &bo);
+    print(@src().fn_name ++ ": bit_offset={}\n", .{ bo });
+    states.ml_state = try states.ml_table.init_state(src, &bo);
+    print(@src().fn_name ++ ": bit_offset={}\n", .{ bo });
 
     for (sequences) |*e| {
         e.* = try decode_sequence(&states, src, &bo);
     }
 
     if (bo != 0) {
-        print("CORRUPTION bo={}\n", .{ bo });
+        print(@src().fn_name ++ ": CORRUPTION bo={}\n", .{ bo });
         return error.Corruption;
     }
 }
@@ -2264,30 +2259,22 @@ fn execute_sequences(fctx: *ZStdFrameContext, out: *ZStdOStream,
     print("execute_sequences: literal_length={}, num_sequences={}\n", .{
         literals.len, sequences.len,
     });
-    print("execute_sequences: previous_offsets={}/{}/{}, current_total_output={}\n", .{
+    print(@src().fn_name ++ ": previous_offsets={}/{}/{}, current_total_output={}\n", .{
         fctx.*.previous_offsets[0], fctx.*.previous_offsets[1],
         fctx.*.previous_offsets[2], fctx.*.current_total_output,
     });
     // TODO
-    var offset_hist = fctx.*.previous_offsets;
+    var offset_hist = fctx.*.previous_offsets[0..];
     var litstream = ZStdIStream.from_slice(literals[0..]);
 
     var total_output = fctx.*.current_total_output;
 
-    // for (size_t i = 0; i < num_sequences; i++) {
-    //     const ZStdSequenceCommand seq = sequences[i];
-    //     {
-    //         const u32 literals_size = copy_literals(seq.literal_length, &litstream, out);
-    //         total_output += literals_size;
-    //     }
     for (sequences) |*e| {
-        // print("#### e={}\n", .{ e.* });
         const literal_size = try copy_literals(e.*.literal_length, &litstream, out);
         total_output += literal_size;
 
         const offset = compute_offset(e, offset_hist[0..]);
         const match_length = e.*.match_length;
-        //print("############## offset={}, match_length={}\n", .{ offset, match_length });
 
         try execute_match_copy(fctx, offset, match_length, total_output, out);
 
@@ -2305,14 +2292,12 @@ fn execute_sequences(fctx: *ZStdFrameContext, out: *ZStdOStream,
     fctx.*.current_total_output = total_output;
 }
 
-inline
-fn copy_literals(literal_length: u32, litstream: *ZStdIStream,
-                 out: *ZStdOStream) !u32 {
-
+inline fn copy_literals(literal_length: u32, litstream: *ZStdIStream,
+                        out: *ZStdOStream) !u32 {
     // If the sequence asks for more literals than are left, the
     // sequence must be corrupted
     if (literal_length > litstream.*.length()) {
-        print("copy_literals: literal_length={} vs {}\n", .{ literal_length, litstream.*.length() });
+        print(@src().fn_name ++ ": literal_length={} vs {}\n", .{ literal_length, litstream.*.length() });
         return error.Corruption;
     }
 
@@ -2325,8 +2310,7 @@ fn copy_literals(literal_length: u32, litstream: *ZStdIStream,
 /// Given an offset code from a sequence command (either an actual offset value
 /// or an index for previous offset), computes the correct offset and updates
 /// the offset history
-inline
-fn compute_offset(seq: *const ZStdSequenceCommand, offset_hist: []u64) usize {
+inline fn compute_offset(seq: *const ZStdSequenceCommand, offset_hist: []u64) usize {
     var offset: usize = 0;
     // Offsets are special, we need to handle the repeat offsets
     if (seq.offset <= 3) {
@@ -2336,15 +2320,16 @@ fn compute_offset(seq: *const ZStdSequenceCommand, offset_hist: []u64) usize {
         // 'most recent one'".
 
         // Use 0 indexing for the array
-        var idx = seq.offset - 1;
-        if (seq.literal_length == 0) {
-            // "There is an exception though, when current sequence's
-            // literals length is 0. In this case, repeated offsets are
-            // shifted by one, so Repeated_Offset1 becomes Repeated_Offset2,
-            // Repeated_Offset2 becomes Repeated_Offset3, and
-            // Repeated_Offset3 becomes Repeated_Offset1 - 1_byte."
-            idx += 1;
-        }
+        // var idx = seq.offset - 1;
+        // if (seq.literal_length == 0) {
+        //     // "There is an exception though, when current sequence's
+        //     // literals length is 0. In this case, repeated offsets are
+        //     // shifted by one, so Repeated_Offset1 becomes Repeated_Offset2,
+        //     // Repeated_Offset2 becomes Repeated_Offset3, and
+        //     // Repeated_Offset3 becomes Repeated_Offset1 - 1_byte."
+        //     idx += 1;
+        // }
+        const idx = if (seq.literal_length == 0) 1 else 0 + seq.offset - 1;
 
         if (idx == 0) {
             offset = offset_hist[0];
@@ -2532,7 +2517,6 @@ fn parse_frame_header(input: *ZStdIStream) !ZStdFrameHeader {
     return frame_header;
 }
 
-// size_t ZSTD_get_decompressed_size(const void *src, const size_t src_len) {
 /// Get the decompressed size of an input stream so memory can be allocated in
 /// advance.
 /// This implementation assumes `src` points to a single ZSTD-compressed frame
@@ -2681,7 +2665,7 @@ const ZStdDictionary = struct {
 
 
 test "ZSTD.text.001" {
-    const origin = @embedFile("zstd_decompress.zig.zst");
+    const origin = @embedFile("textinput.zst");
     // try to get the size
     const size = ZSTD_get_decompressed_size(origin) catch 0;
     print("Expected output size: {}\n", .{ size, });
