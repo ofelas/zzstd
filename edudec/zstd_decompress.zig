@@ -30,7 +30,7 @@ const U64_MAX: u64 = std.math.maxInt(u64);
 
 // no license found: https://github.com/clownpriest/xxhash
 // updated to compile
-const xxhash = @import("xxhash.zig");
+const xxhash = @import("../xxhash/xxhash.zig");
 
 var gta = std.testing.allocator;
 
@@ -2666,6 +2666,30 @@ const ZStdDictionary = struct {
 
 test "ZSTD.text.001" {
     const origin = @embedFile("textinput.zst");
+    // try to get the size
+    const size = ZSTD_get_decompressed_size(origin) catch 0;
+    print("Expected output size: {}\n", .{ size, });
+    // allocate space for output
+    var output = try gta.alloc(u8, if (size > 0) size else origin.len * 10);
+    defer gta.free(output);
+
+    var result = ZSTD_decompress(output, origin, &gta);
+
+    print("result={}, output.len={}, input.len={}\n", .{ result, output.len, origin.len });
+    if (result) |r|{
+        const goodsz = (size != 0) and (r == size);
+        const l = @minimum(1024, r) - 1;
+        const h = xxhash.checksum(output[0..r], 0);
+        print("Calculated hash: {x}, see *** above, good size {}\n", .{ h, goodsz, });
+        // NOTE: We're only dealing with text here -> {s}
+        print("Ok: {}, '{s}'\n", .{ r, output[0..l], });
+    } else |err| {
+        print("Failed: {} {}\n", .{ result, err });
+    }
+}
+
+test "ZSTD.text.003" {
+    const origin = @embedFile("test003.txt.zst");
     // try to get the size
     const size = ZSTD_get_decompressed_size(origin) catch 0;
     print("Expected output size: {}\n", .{ size, });

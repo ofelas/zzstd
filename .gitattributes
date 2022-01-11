@@ -1,0 +1,8 @@
+# Set the default behavior
+* text eol=lf
+
+# Explicitly declare source files
+*.zig text eol=lf
+
+# Denote files that should not be modified.
+*.zst binary
